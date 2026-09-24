@@ -1,0 +1,6 @@
+# Installed into the Airflow image on top of apache/airflow:2.11.0.
+# Airflow itself is pinned so pip never upgrades or downgrades it.
+apache-airflow==2.11.0
+apache-airflow-providers-apache-spark==5.0.0
+pyspark==3.5.3
+astronomer-cosmos==1.15.1

@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AIRFLOW_IMAGE_NAME: airflowdbt-airflow:ci
+
+jobs:
+  # Fast checks inside the same image the stack runs: DAG integrity + dbt parse
+  validate:
+    name: Validate DAGs and dbt project
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Airflow image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: dbt parse
+        run: |
+          docker run --rm -v "$PWD/dbt:/opt/airflow/dbt" -w /opt/airflow/dbt \
+            --entrypoint /opt/airflow/dbt_venv/bin/dbt "$AIRFLOW_IMAGE_NAME" \
+            parse --profiles-dir . --target-path /tmp/target --log-path /tmp/logs
+
+      - name: DAG integrity tests
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
+            -e DBT_PROJECT_DIR=/repo/dbt \
+            --entrypoint bash "$AIRFLOW_IMAGE_NAME" -c \
+            "pip install --quiet pytest && airflow db migrate > /dev/null && python -m pytest tests -v -p no:cacheprovider"
+
+  # Full pipeline: Spark cluster + Thrift Server + Airflow, then run the DAG end to end
+  e2e:
+    name: Run spark_dbt_example end to end
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Airflow image (from cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.AIRFLOW_IMAGE_NAME }}
+          cache-from: type=gha
+
+      - name: Prepare bind mounts
+        run: |
+          # Airflow runs as the runner's uid (1001, also Bitnami Spark's uid) so every
+          # container can write to the shared ./data, ./logs and ./dbt folders
+          echo "AIRFLOW_UID=$(id -u)" > .env
+          mkdir -p logs plugins data/lake data/warehouse data/metastore
+          chmod -R a+rwX data logs plugins dbt
+
+      - name: Start Postgres and Spark (master, worker, Thrift Server)
+        run: docker compose up -d --wait postgres spark-master spark-worker spark-thrift
+
+      - name: Initialise Airflow (migrate DB, create pool and admin user)
+        run: docker compose run --rm airflow-init
+
+      - name: dbt debug (connection to the Thrift Server)
+        run: |
+          docker compose run --rm --entrypoint bash airflow-scheduler -c \
+            "cd /opt/airflow/dbt && /opt/airflow/dbt_venv/bin/dbt debug --profiles-dir . --log-path /tmp/logs"
+
+      - name: Run the DAG (airflow dags test)
+        run: docker compose run --rm airflow-scheduler airflow dags test spark_dbt_example
+
+      - name: Check the DAG run succeeded
+        run: |
+          docker compose run --rm airflow-scheduler \
+            airflow dags list-runs -d spark_dbt_example -o plain | tee runs.txt
+          grep -q success runs.txt
+
+      - name: Show the marts
+        run: |
+          query() {
+            docker compose exec -T spark-thrift /opt/bitnami/spark/bin/beeline \
+              -u jdbc:hive2://localhost:10000 --silent=true --outputformat=table -e "$1"
+          }
+          {
+            echo "## Results of spark_dbt_example"
+            echo "### analytics.city_salary_summary"
+            echo '```'
+            query "select * from analytics.city_salary_summary order by city"
+            echo '```'
+            echo "### analytics.salary_bands"
+            echo '```'
+            query "select * from analytics.salary_bands order by employee_id"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate dbt docs
+        run: |
+          docker compose run --rm --entrypoint bash airflow-scheduler -c \
+            "cd /opt/airflow/dbt && /opt/airflow/dbt_venv/bin/dbt docs generate --profiles-dir . --target-path /tmp/dbt-docs --log-path /tmp/logs && cp -r /tmp/dbt-docs /opt/airflow/data/dbt-docs"
+
+      - name: Upload dbt docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs
+          path: data/dbt-docs
+
+      - name: Collect logs
+        if: always()
+        run: docker compose logs --no-color > logs/docker-compose.log 2>&1 || true
+
+      - name: Upload Airflow and container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

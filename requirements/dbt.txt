@@ -1,0 +1,4 @@
+# Installed into a separate virtualenv (/opt/airflow/dbt_venv) so dbt's
+# dependencies never conflict with Airflow's.
+dbt-core==1.11.15
+dbt-spark[PyHive]==1.11.0

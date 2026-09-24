@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: "{{ var('raw_schema') }}"
+    description: Raw layer written by the Spark ingest job (Parquet in data/lake/raw).
+    tables:
+      - name: employees
+        description: One row per employee, landed from data/sample_data.csv.
+        columns:
+          - name: id
+            data_tests:
+              - not_null

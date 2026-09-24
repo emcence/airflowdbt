@@ -1,0 +1,13 @@
+version: 2
+
+seeds:
+  - name: city_region
+    description: Lookup table mapping each city to its US state and region.
+    columns:
+      - name: city
+        data_tests:
+          - unique
+          - not_null
+      - name: region
+        data_tests:
+          - not_null

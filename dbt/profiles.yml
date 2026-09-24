@@ -1,0 +1,14 @@
+# Checked into the repo on purpose: every value comes from an environment variable
+# (set in docker-compose.yml) with a sensible default, so nothing secret lives here.
+spark_demo:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: spark
+      method: thrift          # PyHive client -> Spark Thrift Server (HiveServer2 protocol)
+      host: "{{ env_var('SPARK_THRIFT_HOST', 'localhost') }}"
+      port: "{{ env_var('SPARK_THRIFT_PORT', '10000') | int }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
+      threads: 1
+      connect_retries: 5
+      connect_timeout: 10

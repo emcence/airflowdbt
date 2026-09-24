@@ -1,0 +1,162 @@
+version: '3.8'
+
+x-airflow-common: &airflow-common
+  #image: apache/airflow:2.11.1
+  build: .
+  image: ${AIRFLOW_IMAGE_NAME:-airflowdbt-airflow:latest}
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    JAVA_HOME: /usr/lib/jvm/default-java
+    PYTHONWARNINGS: "ignore::SyntaxWarning:azure.synapse"
+    AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
+    YARN_CONF_DIR: '$HADOOP_HOME/etc/hadoop'
+    HADOOP_CONF_DIR: '$HADOOP_HOME/etc/hadoop'
+    # dbt / Cosmos (read by dags/spark_dbt_dag.py and dbt/profiles.yml)
+    DBT_PROJECT_DIR: /opt/airflow/dbt
+    DBT_EXECUTABLE_PATH: /opt/airflow/dbt_venv/bin/dbt
+    SPARK_THRIFT_HOST: spark-thrift
+    SPARK_THRIFT_PORT: '10000'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./data:/opt/airflow/data
+    - ./dbt:/opt/airflow/dbt
+    - ./tests:/opt/airflow/tests
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        until airflow db check; do echo "waiting for postgres..."; sleep 5; done &&
+        airflow db migrate &&
+        airflow pools set spark_thrift 2 "Limits concurrent dbt queries on the Spark Thrift Server" &&
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+    #restart: on-failure
+#execute "airflow db init on webserver
+#podman ps
+#podman exec -it <container_id> bash
+#airflow db init
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+
+  spark-master:
+    image: bitnamilegacy/spark:3.5.3
+    #build: .
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ./data:/opt/bitnami/spark/data
+      - ./data:/opt/airflow/data
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.3
+    #build: .
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      # 2 cores / 2G so the long-running Thrift Server (capped at 1 core) never
+      # starves the SparkSubmit jobs
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./data:/opt/bitnami/spark/data
+      - ./data:/opt/airflow/data
+
+  # Spark Thrift Server (HiveServer2 protocol) — the SQL endpoint dbt-spark
+  # connects to with method: thrift (PyHive). Queries run on the cluster above.
+  spark-thrift:
+    image: bitnamilegacy/spark:3.5.3
+    command:
+      - /opt/bitnami/spark/sbin/start-thriftserver.sh
+      - --master
+      - spark://spark-master:7077
+      - --name
+      - spark-thrift-server
+      - --conf
+      - spark.cores.max=1
+      - --conf
+      - spark.executor.memory=512m
+      - --conf
+      - spark.sql.warehouse.dir=/opt/airflow/data/warehouse
+      # Embedded Derby metastore kept next to the warehouse so both are reset together
+      - --conf
+      - spark.hadoop.javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/opt/airflow/data/metastore/metastore_db;create=true
+      - --driver-java-options
+      - -Dderby.stream.error.file=/tmp/derby.log
+      - --hiveconf
+      - hive.server2.thrift.port=10000
+      - --hiveconf
+      - hive.server2.thrift.bind.host=0.0.0.0
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_LOG_DIR: /tmp/spark-logs
+      SPARK_PID_DIR: /tmp
+      HADOOP_USER_NAME: spark
+    ports:
+      - "10000:10000"
+      - "4040:4040"
+    depends_on:
+      - spark-master
+      - spark-worker
+    volumes:
+      - ./data:/opt/airflow/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/10000"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: always

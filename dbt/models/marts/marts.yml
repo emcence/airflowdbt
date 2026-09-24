@@ -1,0 +1,33 @@
+version: 2
+
+models:
+  - name: city_salary_summary
+    description: Headcount and salary statistics per city, with state and region.
+    columns:
+      - name: city
+        data_tests:
+          - unique
+          - not_null
+      - name: region
+        description: Null means the city is missing from the city_region seed.
+        data_tests:
+          - not_null
+      - name: employee_count
+        data_tests:
+          - value_between:
+              arguments:
+                min_value: 1
+                max_value: 1000000
+
+  - name: salary_bands
+    description: Each employee bucketed into a low / mid / high salary band.
+    columns:
+      - name: employee_id
+        data_tests:
+          - unique
+          - not_null
+      - name: salary_band
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["low", "mid", "high"]

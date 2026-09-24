@@ -1,0 +1,35 @@
+name: spark_demo
+version: "1.0.0"
+profile: spark_demo
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  raw_schema: raw
+  # Written by dags/spark_ingest_job.py; same path in every container (./data is bind-mounted)
+  raw_employees_path: /opt/airflow/data/lake/raw/employees
+
+# Every dbt invocation (Cosmos runs one per model) makes sure the raw layer is
+# registered in the metastore, and refreshes the file listing the long-running
+# Thrift Server has cached, because Spark ingest overwrites the Parquet files.
+on-run-start:
+  - "create database if not exists {{ var('raw_schema') }}"
+  - "{{ create_raw_employees_table() }}"
+  - "refresh table {{ var('raw_schema') }}.employees"
+
+models:
+  spark_demo:
+    +file_format: parquet
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+
+seeds:
+  spark_demo:
+    +file_format: parquet

@@ -1,0 +1,13 @@
+venv
+.env
+data/output
+data/lake
+data/warehouse
+data/metastore
+data/dbt-docs
+logs
+dbt/target
+dbt/logs
+dbt/dbt_packages
+__pycache__/
+dbt/.user.yml
