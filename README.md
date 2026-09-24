@@ -1,5 +1,7 @@
 # Airflow + Spark + dbt Example
 
+[![CI](https://github.com/emcence/airflowdbt/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/emcence/airflowdbt/actions/workflows/ci.yml)
+
 A small local data platform that shows how the three tools fit together:
 
 - **Spark** ingests raw data into a Parquet "lake".
