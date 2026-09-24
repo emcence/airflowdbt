@@ -2,8 +2,6 @@ name: CI
 
 on:
   push:
-    branches:
-      - 'main'
   pull_request:
   workflow_dispatch:
 
@@ -45,7 +43,7 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo \
             -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
             -e DBT_PROJECT_DIR=/repo/dbt \
-            --entrypoint bash "$AIRFLOW_IMAGE_NAME" -c \
+            "$AIRFLOW_IMAGE_NAME" bash -c \
             "pip install --quiet pytest && airflow db migrate > /dev/null && python -m pytest tests -v -p no:cacheprovider"
 
   # Full pipeline: Spark cluster + Thrift Server + Airflow, then run the DAG end to end
@@ -83,7 +81,7 @@ jobs:
 
       - name: dbt debug (connection to the Thrift Server)
         run: |
-          docker compose run --rm --entrypoint bash airflow-scheduler -c \
+          docker compose run --rm airflow-scheduler bash -c \
             "cd /opt/airflow/dbt && /opt/airflow/dbt_venv/bin/dbt debug --profiles-dir . --log-path /tmp/logs"
 
       - name: Run the DAG (airflow dags test)
@@ -115,7 +113,7 @@ jobs:
 
       - name: Generate dbt docs
         run: |
-          docker compose run --rm --entrypoint bash airflow-scheduler -c \
+          docker compose run --rm airflow-scheduler bash -c \
             "cd /opt/airflow/dbt && /opt/airflow/dbt_venv/bin/dbt docs generate --profiles-dir . --target-path /tmp/dbt-docs --log-path /tmp/logs && cp -r /tmp/dbt-docs /opt/airflow/data/dbt-docs"
 
       - name: Upload dbt docs

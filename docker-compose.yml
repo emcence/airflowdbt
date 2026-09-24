@@ -49,8 +49,10 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    entrypoint: /bin/bash
+    # Keep the image's entrypoint: it registers the runtime uid (AIRFLOW_UID) in
+    # /etc/passwd, and Airflow crashes without that when the uid isn't 50000
     command:
+      - bash
       - -c
       - |
         until airflow db check; do echo "waiting for postgres..."; sleep 5; done &&
