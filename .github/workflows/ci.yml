@@ -84,8 +84,13 @@ jobs:
           docker compose run --rm airflow-scheduler bash -c \
             "cd /opt/airflow/dbt && /opt/airflow/dbt_venv/bin/dbt debug --profiles-dir . --log-path /tmp/logs"
 
+      # No scheduler runs in CI, so save the DAG to the metadata DB first. That also
+      # registers the dataset aliases Cosmos emits to; without them the first dbt
+      # task fails with "FlushError: Can't flush None value … DatasetModel.aliases"
       - name: Run the DAG (airflow dags test)
-        run: docker compose run --rm airflow-scheduler airflow dags test spark_dbt_example
+        run: |
+          docker compose run --rm airflow-scheduler bash -c \
+            "airflow dags reserialize && airflow dags test spark_dbt_example"
 
       - name: Check the DAG run succeeded
         run: |
