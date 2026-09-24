@@ -30,7 +30,7 @@ dbt-docs:
 	@echo "Open data/dbt-docs/index.html (serve it: python3 -m http.server -d data/dbt-docs 8088)"
 
 trigger:
-	$(COMPOSE) exec airflow-scheduler airflow dags test spark_dbt_example
+	$(COMPOSE) exec airflow-scheduler bash -c "airflow dags reserialize && airflow dags test spark_dbt_example"
 
 test:
 	$(COMPOSE) exec airflow-scheduler bash -c "pip install --quiet pytest && DBT_PROJECT_DIR=/opt/airflow/dbt python -m pytest /opt/airflow/tests -v -p no:cacheprovider"

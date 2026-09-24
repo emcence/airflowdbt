@@ -201,7 +201,7 @@ Other environment variables the DAG reads: `DBT_PROJECT_DIR` (default `/opt/airf
 | `make dbt-debug` | `dbt debug`: checks the Thrift connection |
 | `make dbt-build` | `dbt build` for the whole project in one go, outside Airflow. `spark_ingest` must have run at least once. |
 | `make dbt-docs` | Generates dbt docs into `data/dbt-docs/` |
-| `make trigger` | `airflow dags test spark_dbt_example`: runs the DAG once in the foreground |
+| `make trigger` | `airflow dags reserialize` + `airflow dags test spark_dbt_example`: runs the DAG once in the foreground |
 | `make test` | DAG integrity tests ([tests/test_dags.py](tests/test_dags.py)) inside the scheduler container |
 | `make query` | Queries `analytics.city_salary_summary` with beeline |
 | `make reset` | Stops the stack and deletes the lake, warehouse, metastore and docs |
@@ -280,6 +280,8 @@ If you add more Spark jobs, raise `SPARK_WORKER_CORES` and `SPARK_WORKER_MEMORY`
 | Stale container ID errors with Podman | `airflow-webserver` and `airflow-scheduler` deliberately don't depend on `airflow-init`, only on a healthy Postgres. Delete this project's containers and run `up` again. `airflow-init` must have completed at least once on a fresh setup. |
 | `podman compose up` hangs on `podman wait --condition=running …`, or `bind: address already in use` for 5432 / 7077 / 8080 / 8081 | A port is still held, often by an orphaned `gvproxy` (podman's port forwarder) left over from an earlier VM session. `lsof -nP -iTCP:7077 -sTCP:LISTEN` shows its PID. If it isn't the `gvproxy` of the running machine (`pgrep -fl gvproxy`), kill it, then run `up` again. |
 | `podman compose exec … beeline` hangs when run from a script | Without a terminal, `exec` needs `-T` (no TTY). `make query` already passes it. |
+| `airflow dags test` fails right after the first dbt task with `FlushError: Can't flush None value found in collection DatasetModel.aliases` | Cosmos records each dbt model as an Airflow dataset through a dataset alias, and the alias only exists once the DAG has been saved to the metadata DB. The scheduler does that automatically; without a scheduler (CI, fresh setups) run `airflow dags reserialize` first. `make trigger` and CI already do. |
+| `KeyError: 'getpwuid(): uid not found'` / `The user that Airflow is running as has no username` | The container runs as a uid with no `/etc/passwd` entry (e.g. `AIRFLOW_UID=1001` in CI), and something bypassed the image's entrypoint, which normally adds one. Don't override `entrypoint`; pass `bash -c "…"` as the command instead. |
 | DAG import error `RenderConfig.dbt_executable_path … DBT_RUNNER` | Cosmos has to use `InvocationMode.SUBPROCESS` because dbt lives in its own virtualenv. Keep that setting in [dags/spark_dbt_dag.py](dags/spark_dbt_dag.py). |
 
 ---
